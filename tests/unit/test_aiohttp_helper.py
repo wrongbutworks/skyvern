@@ -6,7 +6,75 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
+from skyvern.exceptions import BlockedHost
 from skyvern.forge.sdk.core.aiohttp_helper import aiohttp_request
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_request_public_network_validation_blocks_loopback_before_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_http_session_opens(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("loopback URL should be rejected before opening an HTTP session")
+
+    monkeypatch.setattr("skyvern.forge.sdk.core.aiohttp_helper.aiohttp.ClientSession", fail_if_http_session_opens)
+
+    with pytest.raises(BlockedHost, match="127.0.0.1"):
+        await aiohttp_request(
+            method="GET",
+            url="http://127.0.0.1:45427/latest/meta-data/iam/security-credentials/",
+            validate_public_network=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_request_public_network_validation_allows_public_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_session_kwargs: dict[str, Any] = {}
+    captured_request_kwargs: dict[str, Any] = {}
+
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json = AsyncMock(return_value={"success": True})
+    mock_response.text = AsyncMock(return_value='{"success": true}')
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=None)
+
+    def capture_request(*_args: Any, **kwargs: Any) -> AsyncMock:
+        captured_request_kwargs.update(kwargs)
+        return mock_response
+
+    mock_session = MagicMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+    mock_session.request = MagicMock(side_effect=capture_request)
+
+    def capture_session(**kwargs: Any) -> MagicMock:
+        captured_session_kwargs.update(kwargs)
+        return mock_session
+
+    connector = object()
+    trace_config = object()
+    monkeypatch.setattr("skyvern.forge.sdk.core.aiohttp_helper.create_public_network_connector", lambda: connector)
+    monkeypatch.setattr(
+        "skyvern.forge.sdk.core.aiohttp_helper.create_public_network_trace_config",
+        lambda: trace_config,
+    )
+    monkeypatch.setattr("skyvern.forge.sdk.core.aiohttp_helper.aiohttp.ClientSession", capture_session)
+
+    status, _headers, body = await aiohttp_request(
+        method="GET",
+        url="https://8.8.8.8/dns-query",
+        validate_public_network=True,
+    )
+
+    assert status == 200
+    assert body == {"success": True}
+    assert captured_session_kwargs["connector"] is connector
+    assert captured_session_kwargs["trace_configs"] == [trace_config]
+    assert captured_request_kwargs["url"] == "https://8.8.8.8/dns-query"
 
 
 @pytest.mark.asyncio

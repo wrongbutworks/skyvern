@@ -7,6 +7,11 @@ import aiohttp
 import structlog
 
 from skyvern.exceptions import HttpException
+from skyvern.forge.sdk.core.ssrf import (
+    create_public_network_connector,
+    create_public_network_trace_config,
+    validate_public_http_url,
+)
 
 LOG = structlog.get_logger()
 DEFAULT_REQUEST_TIMEOUT = 30
@@ -24,6 +29,7 @@ async def aiohttp_request(
     timeout: int = DEFAULT_REQUEST_TIMEOUT,
     follow_redirects: bool = True,
     proxy: str | None = None,
+    validate_public_network: bool = False,
 ) -> tuple[int, dict[str, str], Any]:
     """
     Generic HTTP request function that supports all HTTP methods.
@@ -39,12 +45,19 @@ async def aiohttp_request(
         timeout: Request timeout in seconds
         follow_redirects: Whether to follow redirects
         proxy: Proxy URL
+        validate_public_network: Whether to reject non-public request and redirect targets
 
     Returns:
         Tuple of (status_code, response_headers, response_body)
         where response_body can be dict (for JSON) or str (for text)
     """
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+    session_kwargs: dict[str, Any] = {"timeout": aiohttp.ClientTimeout(total=timeout)}
+    if validate_public_network:
+        validate_public_http_url(url)
+        session_kwargs["connector"] = create_public_network_connector()
+        session_kwargs["trace_configs"] = [create_public_network_trace_config()]
+
+    async with aiohttp.ClientSession(**session_kwargs) as session:
         # Ensure headers is always a dict for type safety
         headers_dict: dict[str, str] = headers or {}
         request_kwargs: dict[str, Any] = {

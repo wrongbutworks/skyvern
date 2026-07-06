@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from skyvern.config import settings
-from skyvern.exceptions import DownloadFileMaxSizeExceeded
+from skyvern.exceptions import BlockedHost, DownloadFileMaxSizeExceeded
 from skyvern.forge.sdk.api import files
 
 
@@ -78,3 +78,14 @@ async def test_resolve_remote_url_downloads_file(monkeypatch: pytest.MonkeyPatch
         max_size_mb=10,
         organization_id="org-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_download_file_blocks_loopback_url_before_http_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_if_http_session_opens(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("loopback URL should be rejected before opening an HTTP session")
+
+    monkeypatch.setattr(files.aiohttp, "ClientSession", fail_if_http_session_opens)
+
+    with pytest.raises(BlockedHost, match="127.0.0.1"):
+        await files.download_file("http://127.0.0.1:45427/latest/meta-data/iam/security-credentials/")

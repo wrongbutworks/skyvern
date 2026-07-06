@@ -19,6 +19,11 @@ from skyvern.config import settings
 from skyvern.constants import BROWSER_DOWNLOAD_TIMEOUT, BROWSER_DOWNLOADING_SUFFIX, REPO_ROOT_DIR
 from skyvern.exceptions import DownloadFileMaxSizeExceeded, DownloadFileMaxWaitingTime
 from skyvern.forge import app
+from skyvern.forge.sdk.core.ssrf import (
+    create_public_network_connector,
+    create_public_network_trace_config,
+    validate_public_http_url,
+)
 from skyvern.utils.url_validators import encode_url
 
 if TYPE_CHECKING:
@@ -209,9 +214,14 @@ async def download_file(
                 LOG.info("Downloading file from local file system", url=url)
                 return local_path
 
-        async with aiohttp.ClientSession(raise_for_status=True) as session:
-            LOG.info("Starting to download file", url=url)
-            encoded_url = encode_url(url)
+        LOG.info("Starting to download file", url=url)
+        encoded_url = encode_url(url)
+        validate_public_http_url(encoded_url)
+        async with aiohttp.ClientSession(
+            connector=create_public_network_connector(),
+            raise_for_status=True,
+            trace_configs=[create_public_network_trace_config()],
+        ) as session:
             async with session.get(URL(encoded_url, encoded=True), headers=headers) as response:
                 # Check the content length if available
                 if max_size_mb and response.content_length and response.content_length > max_size_mb * 1024 * 1024:
